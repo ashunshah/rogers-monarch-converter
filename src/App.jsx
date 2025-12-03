@@ -4,10 +4,10 @@ import { intelligentConvert } from './utils/intelligentConverter';
 import './App.css';
 
 function App() {
-  const [testData, setTestData] = useState(null);
+  // Changed to array to support multiple files
+  const [testFiles, setTestFiles] = useState([]);
   const [targetData, setTargetData] = useState(null);
-  const [convertedData, setConvertedData] = useState(null);
-  const [fileName, setFileName] = useState('');
+  const [convertedFiles, setConvertedFiles] = useState([]);
   const [targetFileName, setTargetFileName] = useState('');
   const [conversionStats, setConversionStats] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -15,22 +15,37 @@ function App() {
   const [currentPage, setCurrentPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useState(50);
 
-  const handleTestFileUpload = (file) => {
-    if (!file) return;
+  const handleTestFileUpload = (files) => {
+    if (!files || files.length === 0) return;
 
-    setFileName(file.name);
+    const filesArray = Array.from(files);
+    const newTestFiles = [];
 
-    Papa.parse(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: (results) => {
-        setTestData(results.data);
-        // Auto-convert if we already have the test file
-        performConversion(results.data, targetData);
-      },
-      error: (error) => {
-        alert('Error parsing test CSV: ' + error.message);
-      }
+    let parsedCount = 0;
+
+    filesArray.forEach((file) => {
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (results) => {
+          newTestFiles.push({
+            name: file.name,
+            data: results.data
+          });
+          parsedCount++;
+
+          // When all files are parsed, update state and convert
+          if (parsedCount === filesArray.length) {
+            setTestFiles(prev => [...prev, ...newTestFiles]);
+            // Auto-convert if we already have the target file
+            performConversion([...testFiles, ...newTestFiles], targetData);
+          }
+        },
+        error: (error) => {
+          alert(`Error parsing ${file.name}: ${error.message}`);
+          parsedCount++;
+        }
+      });
     });
   };
 
@@ -44,8 +59,8 @@ function App() {
       skipEmptyLines: true,
       complete: (results) => {
         setTargetData(results.data);
-        // Auto-convert if we already have the test file
-        performConversion(testData, results.data);
+        // Auto-convert if we already have test files
+        performConversion(testFiles, results.data);
       },
       error: (error) => {
         alert('Error parsing target CSV: ' + error.message);
@@ -53,23 +68,41 @@ function App() {
     });
   };
 
-  const performConversion = (test, target) => {
-    if (!test || !target || target.length === 0) {
+  const performConversion = (testFilesArray, target) => {
+    if (!testFilesArray || testFilesArray.length === 0 || !target || target.length === 0) {
       // Both files are required for conversion
-      setConvertedData(null);
+      setConvertedFiles([]);
       setConversionStats(null);
       return;
     }
 
-    // Use intelligent conversion with target reference
-    const result = intelligentConvert(test, target);
-    setConvertedData(result.converted);
-    setConversionStats(result.stats);
+    // Convert each test file
+    const converted = testFilesArray.map(testFile => {
+      const result = intelligentConvert(testFile.data, target);
+      return {
+        name: testFile.name,
+        data: result.converted,
+        stats: result.stats
+      };
+    });
+
+    setConvertedFiles(converted);
+
+    // Aggregate stats
+    const totalStats = converted.reduce((acc, file) => ({
+      totalRows: acc.totalRows + file.stats.totalRows,
+      categorizedRows: acc.categorizedRows + file.stats.categorizedRows,
+      uncategorizedRows: acc.uncategorizedRows + file.stats.uncategorizedRows,
+      learnedMerchants: file.stats.learnedMerchants // Same for all
+    }), { totalRows: 0, categorizedRows: 0, uncategorizedRows: 0, learnedMerchants: 0 });
+
+    totalStats.categorizationRate = ((totalStats.categorizedRows / totalStats.totalRows) * 100).toFixed(1) + '%';
+    setConversionStats(totalStats);
   };
 
   const handleTestFileInput = (e) => {
-    const file = e.target.files[0];
-    handleTestFileUpload(file);
+    const files = e.target.files;
+    handleTestFileUpload(files);
   };
 
   const handleTargetFileInput = (e) => {
@@ -94,39 +127,61 @@ function App() {
     setIsDragging(false);
     setActiveDropZone(null);
 
-    const file = e.dataTransfer.files[0];
-    if (file && file.type === 'text/csv') {
-      if (zone === 'test') {
-        handleTestFileUpload(file);
+    const files = e.dataTransfer.files;
+    if (zone === 'test') {
+      // Validate all files are CSV
+      const allCSV = Array.from(files).every(file => file.type === 'text/csv' || file.name.endsWith('.csv'));
+      if (allCSV && files.length > 0) {
+        handleTestFileUpload(files);
       } else {
-        handleTargetFileUpload(file);
+        alert('Please upload CSV files only');
       }
     } else {
-      alert('Please upload a CSV file');
+      const file = files[0];
+      if (file && (file.type === 'text/csv' || file.name.endsWith('.csv'))) {
+        handleTargetFileUpload(file);
+      } else {
+        alert('Please upload a CSV file');
+      }
     }
   };
 
   const downloadCSV = () => {
-    if (!convertedData) return;
+    if (!convertedFiles || convertedFiles.length === 0) return;
 
-    const csv = Papa.unparse(convertedData);
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'monarch-import.csv';
-    a.click();
-    window.URL.revokeObjectURL(url);
+    convertedFiles.forEach(file => {
+      const csv = Papa.unparse(file.data);
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      // Generate filename: converted-originalname.csv
+      const originalName = file.name.replace(/\.csv$/i, '');
+      a.download = `converted-${originalName}.csv`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    });
   };
 
   const reset = () => {
-    setTestData(null);
+    setTestFiles([]);
     setTargetData(null);
-    setConvertedData(null);
-    setFileName('');
+    setConvertedFiles([]);
     setTargetFileName('');
     setConversionStats(null);
     setCurrentPage(1);
+  };
+
+  const removeTestFile = (index) => {
+    const newFiles = testFiles.filter((_, i) => i !== index);
+    setTestFiles(newFiles);
+    // Re-convert with remaining files
+    if (newFiles.length > 0 && targetData) {
+      performConversion(newFiles, targetData);
+    } else {
+      setConvertedFiles([]);
+      setConversionStats(null);
+    }
   };
 
   return (
@@ -137,7 +192,7 @@ function App() {
       </header>
 
       <main className="container">
-        {!convertedData ? (
+        {convertedFiles.length === 0 ? (
           <>
             <div className="instructions">
               <h2>How It Works</h2>
@@ -177,20 +232,45 @@ function App() {
 
             <div className="upload-grid">
               <div
-                className={`upload-zone ${isDragging && activeDropZone === 'test' ? 'dragging' : ''} ${testData ? 'uploaded' : ''}`}
+                className={`upload-zone ${isDragging && activeDropZone === 'test' ? 'dragging' : ''} ${testFiles.length > 0 ? 'uploaded' : ''}`}
                 onDragOver={(e) => handleDragOver(e, 'test')}
                 onDragLeave={handleDragLeave}
                 onDrop={(e) => handleDrop(e, 'test')}
               >
                 <div className="upload-content">
-                  {testData ? (
+                  {testFiles.length > 0 ? (
                     <>
                       <svg className="upload-icon success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                       </svg>
                       <h3>Rogers CSV Uploaded ✓</h3>
-                      <p className="file-name-small">{fileName}</p>
-                      <p className="file-stats">{testData.length} transactions</p>
+                      <p className="file-stats">{testFiles.length} file{testFiles.length > 1 ? 's' : ''} uploaded</p>
+                      <div className="file-list">
+                        {testFiles.map((file, index) => (
+                          <div key={index} className="file-item">
+                            <span className="file-name-small">{file.name}</span>
+                            <span className="file-count">({file.data.length} transactions)</span>
+                            <button 
+                              onClick={() => removeTestFile(index)}
+                              className="remove-file-btn"
+                              title="Remove file"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      <input
+                        type="file"
+                        accept=".csv"
+                        onChange={handleTestFileInput}
+                        id="test-file-upload-more"
+                        className="file-input"
+                        multiple
+                      />
+                      <label htmlFor="test-file-upload-more" className="upload-button secondary">
+                        Add More Files
+                      </label>
                     </>
                   ) : (
                     <>
@@ -198,16 +278,17 @@ function App() {
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                       </svg>
                       <h3>Upload Rogers CSV</h3>
-                      <p>Required - Your transaction export</p>
+                      <p>Required - Your transaction export(s)</p>
                       <input
                         type="file"
                         accept=".csv"
                         onChange={handleTestFileInput}
                         id="test-file-upload"
                         className="file-input"
+                        multiple
                       />
                       <label htmlFor="test-file-upload" className="upload-button">
-                        Choose File
+                        Choose Files
                       </label>
                     </>
                   )}
@@ -258,11 +339,13 @@ function App() {
             <div className="results-header">
               <div>
                 <h2>✅ Conversion Complete</h2>
-                <p className="file-name">Source: {fileName}</p>
+                <p className="file-name">Source: {convertedFiles.length} file{convertedFiles.length > 1 ? 's' : ''}</p>
                 {targetFileName && (
                   <p className="file-name">Reference: {targetFileName}</p>
                 )}
-                <p className="record-count">{convertedData.length} transactions converted</p>
+                <p className="record-count">
+                  {convertedFiles.reduce((sum, file) => sum + file.data.length, 0)} transactions converted
+                </p>
                 {conversionStats && (
                   <div className="stats-badges">
                     <span className="badge">
@@ -279,7 +362,7 @@ function App() {
               </div>
               <div className="button-group">
                 <button onClick={downloadCSV} className="download-button">
-                  Download Converted CSV
+                  Download Converted CSV{convertedFiles.length > 1 ? 's' : ''}
                 </button>
                 <button onClick={reset} className="reset-button">
                   Convert Another File
@@ -287,93 +370,105 @@ function App() {
               </div>
             </div>
 
-            <div className="preview-section">
-              <h3>Preview ({convertedData.length} transactions)</h3>
+            {convertedFiles.map((file, fileIndex) => {
+              const allData = file.data;
+              const totalPages = Math.ceil(allData.length / rowsPerPage);
+              
+              return (
+                <div key={fileIndex} className="preview-section">
+                  <h3>
+                    {file.name} ({allData.length} transactions)
+                    <span className="file-badge">
+                      {file.stats.categorizedRows} categorized ({file.stats.categorizationRate})
+                    </span>
+                  </h3>
 
-              <div className="pagination-controls">
-                <div className="rows-per-page">
-                  <label>Rows per page: </label>
-                  <select
-                    value={rowsPerPage}
-                    onChange={(e) => {
-                      setRowsPerPage(Number(e.target.value));
-                      setCurrentPage(1);
-                    }}
-                  >
-                    <option value={25}>25</option>
-                    <option value={50}>50</option>
-                    <option value={100}>100</option>
-                    <option value={Math.max(convertedData.length, 1)}>All</option>
-                  </select>
-                </div>
-                <div className="page-info">
-                  Showing {Math.min((currentPage - 1) * rowsPerPage + 1, convertedData.length)} - {Math.min(currentPage * rowsPerPage, convertedData.length)} of {convertedData.length}
-                </div>
-              </div>
+                  <div className="pagination-controls">
+                    <div className="rows-per-page">
+                      <label>Rows per page: </label>
+                      <select
+                        value={rowsPerPage}
+                        onChange={(e) => {
+                          setRowsPerPage(Number(e.target.value));
+                          setCurrentPage(1);
+                        }}
+                      >
+                        <option value={25}>25</option>
+                        <option value={50}>50</option>
+                        <option value={100}>100</option>
+                        <option value={Math.max(allData.length, 1)}>All</option>
+                      </select>
+                    </div>
+                    <div className="page-info">
+                      Showing {Math.min((currentPage - 1) * rowsPerPage + 1, allData.length)} - {Math.min(currentPage * rowsPerPage, allData.length)} of {allData.length}
+                    </div>
+                  </div>
 
-              <div className="table-container">
-                <table className="preview-table">
-                  <thead>
-                    <tr>
-                      <th>Date</th>
-                      <th>Merchant</th>
-                      <th>Category</th>
-                      <th>Amount</th>
-                      <th>Owner</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {convertedData
-                      .slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage)
-                      .map((row, idx) => (
-                        <tr key={idx}>
-                          <td>{row.Date}</td>
-                          <td>{row.Merchant}</td>
-                          <td>{row.Category}</td>
-                          <td className={parseFloat(row.Amount) < 0 ? 'negative' : 'positive'}>
-                            ${Math.abs(parseFloat(row.Amount)).toFixed(2)}
-                          </td>
-                          <td>{row.Owner}</td>
+                  <div className="table-container">
+                    <table className="preview-table">
+                      <thead>
+                        <tr>
+                          <th>Date</th>
+                          <th>Merchant</th>
+                          <th>Category</th>
+                          <th>Amount</th>
+                          <th>Owner</th>
                         </tr>
-                      ))}
-                  </tbody>
-                </table>
-              </div>
+                      </thead>
+                      <tbody>
+                        {allData
+                          .slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage)
+                          .map((row, idx) => (
+                            <tr key={idx}>
+                              <td>{row.Date}</td>
+                              <td>{row.Merchant}</td>
+                              <td>{row.Category}</td>
+                              <td className={parseFloat(row.Amount) < 0 ? 'negative' : 'positive'}>
+                                ${Math.abs(parseFloat(row.Amount)).toFixed(2)}
+                              </td>
+                              <td>{row.Owner}</td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
 
-              <div className="pagination">
-                <button
-                  onClick={() => setCurrentPage(1)}
-                  disabled={currentPage === 1}
-                  className="pagination-button"
-                >
-                  First
-                </button>
-                <button
-                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                  disabled={currentPage === 1}
-                  className="pagination-button"
-                >
-                  Previous
-                </button>
-                <span className="page-indicator">
-                  Page {currentPage} of {Math.max(1, Math.ceil(convertedData.length / rowsPerPage))}
-                </span>
-                <button
-                  onClick={() => setCurrentPage(p => Math.min(Math.ceil(convertedData.length / rowsPerPage), p + 1))}
-                  disabled={currentPage >= Math.ceil(convertedData.length / rowsPerPage)}
-                  className="pagination-button"
-                >
-                  Next
-                </button>
-                <button
-                  onClick={() => setCurrentPage(Math.ceil(convertedData.length / rowsPerPage))}
-                  disabled={currentPage >= Math.ceil(convertedData.length / rowsPerPage)}
-                  className="pagination-button"
-                >
-                  Last
-                </button>
-              </div>
-            </div>
+                  <div className="pagination">
+                    <button
+                      onClick={() => setCurrentPage(1)}
+                      disabled={currentPage === 1}
+                      className="pagination-button"
+                    >
+                      First
+                    </button>
+                    <button
+                      onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                      disabled={currentPage === 1}
+                      className="pagination-button"
+                    >
+                      Previous
+                    </button>
+                    <span className="page-indicator">
+                      Page {currentPage} of {Math.max(1, totalPages)}
+                    </span>
+                    <button
+                      onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                      disabled={currentPage >= totalPages}
+                      className="pagination-button"
+                    >
+                      Next
+                    </button>
+                    <button
+                      onClick={() => setCurrentPage(totalPages)}
+                      disabled={currentPage >= totalPages}
+                      className="pagination-button"
+                    >
+                      Last
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </main>
