@@ -1,4 +1,4 @@
-import { normalize, areMerchantsSimilar } from './categoryMapping';
+import { normalize, areMerchantsSimilar } from "./categoryMapping";
 
 /**
  * Intelligently learn category mappings from Monarch export
@@ -34,7 +34,9 @@ function learnFromMonarch(monarchData) {
   // Convert to most common category for each merchant
   const finalMerchantMap = {};
   for (const [merchant, categories] of Object.entries(merchantToCategoryMap)) {
-    const mostCommon = Object.entries(categories).sort((a, b) => b[1] - a[1])[0];
+    const mostCommon = Object.entries(categories).sort(
+      (a, b) => b[1] - a[1],
+    )[0];
     if (mostCommon) {
       finalMerchantMap[merchant] = mostCommon[0];
     }
@@ -42,14 +44,13 @@ function learnFromMonarch(monarchData) {
 
   return {
     merchantToCategoryMap: finalMerchantMap,
-    merchantTransforms
+    merchantTransforms,
   };
 }
 
-
 // Apply merchant name transformation
 function transformMerchantName(rogersName, merchantTransforms) {
-  if (!rogersName) return '';
+  if (!rogersName) return "";
 
   const normalized = normalize(rogersName);
 
@@ -67,20 +68,20 @@ function transformMerchantName(rogersName, merchantTransforms) {
 
   // Default: clean up the Rogers name with title case
   return rogersName
-    .split(' ')
-    .map(word => {
-      const lowerWords = ['ca', 'inc', 'the', 'and', 'of', 'for', 'w', 'on'];
+    .split(" ")
+    .map((word) => {
+      const lowerWords = ["ca", "inc", "the", "and", "of", "for", "w", "on"];
       if (lowerWords.includes(word.toLowerCase())) {
         return word.toLowerCase();
       }
       return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
     })
-    .join(' ');
+    .join(" ");
 }
 
 // Determine category using learned mappings
 function determineCategory(rogersRow, merchantMap) {
-  const merchantName = normalize(rogersRow['Merchant Name']);
+  const merchantName = normalize(rogersRow["Merchant Name"]);
 
   // Try exact match first
   if (merchantMap[merchantName]) {
@@ -89,12 +90,15 @@ function determineCategory(rogersRow, merchantMap) {
 
   // Try partial matches (fuzzy matching)
   for (const [learnedMerchant, category] of Object.entries(merchantMap)) {
-    if (merchantName.includes(learnedMerchant) || learnedMerchant.includes(merchantName)) {
+    if (
+      merchantName.includes(learnedMerchant) ||
+      learnedMerchant.includes(merchantName)
+    ) {
       return category;
     }
   }
 
-  return 'Uncategorized';
+  return "Uncategorized";
 }
 
 // Learn account name from Monarch data
@@ -107,7 +111,7 @@ function learnAccountName(monarchData) {
   }
 
   const mostCommon = Object.entries(accounts).sort((a, b) => b[1] - a[1])[0];
-  return mostCommon ? mostCommon[0] : 'Rogers';
+  return mostCommon ? mostCommon[0] : "Rogers";
 }
 
 /**
@@ -117,40 +121,48 @@ export function intelligentConvert(rogersData, monarchData) {
   console.log(`Learning from ${monarchData.length} Monarch transactions...`);
 
   // Step 1: Learn patterns from Monarch data
-  const { merchantToCategoryMap, merchantTransforms } = learnFromMonarch(monarchData);
+  const { merchantToCategoryMap, merchantTransforms } =
+    learnFromMonarch(monarchData);
   const accountName = learnAccountName(monarchData);
 
-  console.log('Learned mappings:', {
+  console.log("Learned mappings:", {
     uniqueMerchants: Object.keys(merchantToCategoryMap).length,
-    accountName
+    accountName,
   });
 
   // Step 2: Apply learned patterns to Rogers data
-  const converted = rogersData.map(rogersRow => {
-    const amount = (rogersRow.Amount || '').replace(/[$,]/g, '');
+  const converted = rogersData.map((rogersRow) => {
+    const amount = (rogersRow.Amount || "").replace(/[$,]/g, "");
     const numAmount = parseFloat(amount);
 
-    // Rogers exports debits as negative, which matches Monarch format
-    const finalAmount = !isNaN(numAmount) ? numAmount.toString() : '';
+    // Invert amounts: positive to negative, negative to positive
+    const finalAmount = !isNaN(numAmount) ? (numAmount * -1).toString() : "";
 
     return {
-      Date: rogersRow.Date || '',
-      Merchant: transformMerchantName(rogersRow['Merchant Name'], merchantTransforms),
+      Date: rogersRow.Date || "",
+      Merchant: transformMerchantName(
+        rogersRow["Merchant Name"],
+        merchantTransforms,
+      ),
       Category: determineCategory(rogersRow, merchantToCategoryMap),
       Account: accountName,
-      'Original Statement': '',
-      Notes: '',
+      "Original Statement": "",
+      Notes: "",
       Amount: finalAmount,
-      Tags: '',
-      Owner: (rogersRow['Name on Card'] || '')
-        .split(' ')
-        .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-        .join(' ')
+      Tags: "",
+      Owner: (rogersRow["Name on Card"] || "")
+        .split(" ")
+        .map(
+          (word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase(),
+        )
+        .join(" "),
     };
   });
 
   // Calculate stats
-  const categorized = converted.filter(row => row.Category !== 'Uncategorized').length;
+  const categorized = converted.filter(
+    (row) => row.Category !== "Uncategorized",
+  ).length;
 
   return {
     converted,
@@ -159,8 +171,8 @@ export function intelligentConvert(rogersData, monarchData) {
       categorizedRows: categorized,
       uncategorizedRows: converted.length - categorized,
       learnedMerchants: Object.keys(merchantToCategoryMap).length,
-      categorizationRate: ((categorized / rogersData.length) * 100).toFixed(1) + '%'
-    }
+      categorizationRate:
+        ((categorized / rogersData.length) * 100).toFixed(1) + "%",
+    },
   };
 }
-
